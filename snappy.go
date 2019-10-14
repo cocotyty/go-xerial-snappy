@@ -55,7 +55,6 @@ func Decode(src []byte) ([]byte, error) {
 // 'copy' from org.xerial.snappy.SnappyOutputStream
 type Writer struct {
 	w            io.Writer
-	outputSize   int
 	blockSize    int
 	outputBuffer blockWriter
 	inputBuffer  blockWriter
@@ -89,6 +88,9 @@ func NewWriterWithBlockSize(w io.Writer, blockSize int) *Writer {
 
 func (w *Writer) Write(data []byte) (n int, err error) {
 	for {
+		if len(data) == 0 {
+			return
+		}
 		num, _ := w.inputBuffer.Write(data)
 		if num == 0 {
 			if err = w.compressInput(); err != nil {
@@ -111,17 +113,34 @@ func (w *Writer) Flush() error {
 	return w.dumpOutput()
 }
 
+func (w *Writer) Close() error {
+	w.Flush()
+	w.inputBuffer.Reset()
+	w.outputBuffer.Reset()
+	return nil
+}
+
 func (w *Writer) compressInput() error {
 	block := w.inputBuffer.Reset()
+	if len(block) == 0 {
+		return nil
+	}
 	if !w.hasSufficientOutputBufferFor(len(block)) {
 		if err := w.dumpOutput(); err != nil {
 			return err
 		}
 	}
 	encodedLen := len(master.Encode(w.outputBuffer.block[w.outputBuffer.cursor+4:], block))
-	binary.Write(&w.outputBuffer, binary.BigEndian, int32(encodedLen))
+	_ = binary.Write(&w.outputBuffer, binary.BigEndian, int32(encodedLen))
 	w.outputBuffer.cursor += encodedLen
 	return nil
+}
+
+func (w *Writer) Reset(writer io.Writer) {
+	w.w = writer
+	w.outputBuffer.Reset()
+	w.inputBuffer.Reset()
+	_, _ = w.outputBuffer.Write(currentHeader)
 }
 
 func (w *Writer) hasSufficientOutputBufferFor(inputSize int) bool {
